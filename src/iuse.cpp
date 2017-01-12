@@ -54,8 +54,6 @@
 
 #include "iuse_software.h"
 
-using namespace units::literals;
-
 const mtype_id mon_bee( "mon_bee" );
 const mtype_id mon_blob( "mon_blob" );
 const mtype_id mon_cat( "mon_cat" );
@@ -3680,7 +3678,8 @@ int iuse::firecracker_pack(player *p, item *it, bool, const tripoint& )
     wrefresh(w);
     bool close = false;
     long charges = 1;
-    char ch = getch();
+    // TODO: use input context
+    char ch = inp_mngr.get_input_event().get_first_input();
     while (!close) {
         if (ch == 'I') {
             charges++;
@@ -3730,7 +3729,8 @@ int iuse::firecracker_pack(player *p, item *it, bool, const tripoint& )
             return 0; // don't use any charges at all
         }
         if (!close) {
-            ch = getch();
+            // TODO: rewrite loop so this is only called at one place
+            ch = inp_mngr.get_input_event().get_first_input();
         }
     }
     return charges;
@@ -7016,7 +7016,7 @@ vehicle *pickveh( const tripoint& center, bool advanced )
         auto &v = veh.v;
         const auto gp = v->global_pos();
         if( rl_dist( center.x, center.y, gp.x, gp.y ) < 40 &&
-            v->fuel_left( "battery", true, true ) > 0 &&
+            v->fuel_left( "battery", true ) > 0 &&
             ( v->all_parts_with_feature( advctrl, true ).size() > 0 ||
             ( !advanced && v->all_parts_with_feature( ctrl, true ).size() > 0 ) ) ) {
             vehs.push_back( v );
@@ -7058,7 +7058,7 @@ int iuse::remoteveh(player *p, item *it, bool t, const tripoint &pos)
         } else if( remote == nullptr ) {
             p->add_msg_if_player( _("Lost contact with the vehicle.") );
             stop = true;
-        } else if( remote->fuel_left( "battery", true, true ) == 0 ) {
+        } else if( remote->fuel_left( "battery", true ) == 0 ) {
             p->add_msg_if_player( m_bad, _("The vehicle's battery died.") );
             stop = true;
         }

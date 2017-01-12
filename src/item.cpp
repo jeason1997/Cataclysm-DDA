@@ -50,8 +50,6 @@
 #include <tuple>
 #include <iterator>
 
-using namespace units::literals;
-
 static const std::string GUN_MODE_VAR_NAME( "item::mode" );
 
 const skill_id skill_survival( "survival" );
@@ -379,6 +377,11 @@ bool item::covers( const body_part bp ) const
 
 std::bitset<num_bp> item::get_covered_body_parts() const
 {
+    return get_covered_body_parts( get_side() );
+}
+
+std::bitset<num_bp> item::get_covered_body_parts( side s ) const
+{
     std::bitset<num_bp> res;
 
     if( is_gun() ) {
@@ -394,15 +397,22 @@ std::bitset<num_bp> item::get_covered_body_parts() const
 
     res |= armor->covers;
 
-    switch (get_side()) {
-        case LEFT:
+    if( !armor->sided ) {
+        return res; // Just ignore the side.
+    }
+
+    switch( s ) {
+        case side::BOTH:
+            break;
+
+        case side::LEFT:
             res.reset(bp_arm_r);
             res.reset(bp_hand_r);
             res.reset(bp_leg_r);
             res.reset(bp_foot_r);
             break;
 
-        case RIGHT:
+        case side::RIGHT:
             res.reset(bp_arm_l);
             res.reset(bp_hand_l);
             res.reset(bp_leg_l);
@@ -418,20 +428,28 @@ bool item::is_sided() const {
     return t ? t->sided : false;
 }
 
-int item::get_side() const {
-    return get_var("lateral", BOTH);
+side item::get_side() const {
+    // MSVC complains if directly cast double to enum
+    return static_cast<side>( static_cast<int>( get_var( "lateral", static_cast<int>( side::BOTH ) ) ) );
 }
 
 bool item::set_side (side s) {
-    if (!is_sided()) return false;
+    if( !is_sided() ) {
+        return false;
+    }
 
-    if (s == BOTH) {
+    if( s == side::BOTH ) {
         erase_var("lateral");
     } else {
-        set_var("lateral", s);
+        set_var("lateral", static_cast<int>( s ) );
     }
 
     return true;
+}
+
+bool item::swap_side()
+{
+    return set_side( opposite_side( get_side() ) );
 }
 
 bool item::is_worn_only_with( const item &it ) const
@@ -1194,38 +1212,6 @@ std::string item::info( bool showtext, std::vector<iteminfo> &info ) const
         info.push_back( iteminfo( "GUNMOD", temp2.str() ) );
 
     }
-
-    if( is_engine() ) {
-        insert_separation_line();
-
-        if( !type->engine->fuel.is_null() ) {
-            auto col = string_from_color( item::find_type( default_ammo( type->engine->fuel ) )->color );
-            info.emplace_back( "ENGINE", _( "Fuel: " ),
-                               string_format( "<color_%s>%s</color>", col.c_str(), _( type->engine->fuel.c_str() ) ) );
-        }
-        if( type->engine->power > 0 && !has_flag( "MANUAL_ENGINE" ) ) {
-            info.emplace_back( "ENGINE", _( "Power: " ), _( "<num> hp" ), watt_to_hp( type->engine->power ), true );
-        }
-
-        info.emplace_back( "ENGINE", _( "Efficiency: " ), "<num>%", type->engine->efficiency, true );
-
-        if( !type->engine->gears.empty() ) {
-            info.emplace_back( "ENGINE", _( "Gears: " ), "", type->engine->gears.size(), true );
-        }
-        if( type->engine->redline > 0 ) {
-            info.emplace_back( "ENGINE", _( "Redline: " ), _( "<num> rpm" ), type->engine->redline, true );
-        }
-
-        if( engine_start_time( 20 ) > 0 ) {
-            info.emplace_back( "ENGINE", _( "Starting time (20°C): " ), _( "<num> seconds" ),
-                               int( engine_start_time( 20 ) / 16.67 ), true, "", true, true );
-        }
-        if( engine_start_time( 0 ) > 0 ) {
-            info.emplace_back( "ENGINE", _( "Starting time (0°C): " ), _( "<num> seconds" ),
-                               int( engine_start_time( 0 ) / 16.67 ), true, "", true, true );
-        }
-    }
-
     if( is_armor() ) {
         temp1.str( "" );
         temp1 << _( "Covers: " );
@@ -1592,18 +1578,6 @@ std::string item::info( bool showtext, std::vector<iteminfo> &info ) const
             }
         }
 
-        if( is_engine() ) {
-            if( type->engine->start_time == 0 ) {
-                info.emplace_back( "ENGINE", _( "* This engine can be started <good>instantaneously</good>." ) );
-            }
-            if( type->engine->start_energy == 0 ) {
-                info.emplace_back( "ENGINE", _( "* This engine can be started <good>without a battery</good>." ) );
-            }
-            if( type->engine->gears.empty() ) {
-                info.emplace_back( "ENGINE", _( "* This engines efficiency is <good>independent of speed</good>." ) );
-            }
-        }
-
         if( is_armor() ) {
             if( has_flag( "FIT" ) ) {
                 info.push_back( iteminfo( "DESCRIPTION",
@@ -1925,6 +1899,11 @@ int item::get_free_mod_locations( const std::string &location ) const
     return result;
 }
 
+int item::engine_displacement() const
+{
+    return type->engine ? type->engine->displacement : 0;
+}
+
 const std::string &item::symbol() const
 {
     return type->sym;
@@ -2047,23 +2026,23 @@ nc_color item::color_in_inventory() const
 
 void item::on_wear( Character &p )
 {
-    if (is_sided() && get_side() == BOTH) {
+    if( is_sided() && get_side() == side::BOTH ) {
         // for sided items wear the item on the side which results in least encumbrance
         int lhs = 0, rhs = 0;
 
-        set_side(LEFT);
+        set_side( side::LEFT );
         const auto left_enc = p.get_encumbrance( *this );
         for( size_t i = 0; i < num_bp; i++ ) {
             lhs += left_enc[i].encumbrance;
         }
 
-        set_side(RIGHT);
+        set_side( side::RIGHT );
         const auto right_enc = p.get_encumbrance( *this );
         for( size_t i = 0; i < num_bp; i++ ) {
             rhs += right_enc[i].encumbrance;
         }
 
-        set_side(lhs <= rhs ? LEFT : RIGHT);
+        set_side( lhs <= rhs ? side::LEFT : side::RIGHT );
     }
 
     // TODO: artifacts currently only work with the player character
@@ -2079,7 +2058,7 @@ void item::on_takeoff( Character &p )
     p.on_item_takeoff( *this );
 
     if (is_sided()) {
-        set_side(BOTH);
+        set_side( side::BOTH );
     }
 }
 
@@ -2194,8 +2173,11 @@ std::string item::tname( unsigned int quantity, bool with_prefix ) const
         damtext.insert( 0, _( "faulty " ) );
     }
 
-    std::string vehtext;
-    if( is_wheel() && type->wheel->diameter > 0 ) {
+    std::string vehtext = "";
+    if( is_engine() && engine_displacement() > 0 ) {
+        vehtext = string_format( pgettext( "vehicle adjective", "%2.1fL " ), engine_displacement() / 100.0f );
+
+    } else if( is_wheel() && type->wheel->diameter > 0 ) {
         vehtext = string_format( pgettext( "vehicle adjective", "%d\" " ), type->wheel->diameter );
     }
 
@@ -2244,64 +2226,55 @@ std::string item::tname( unsigned int quantity, bool with_prefix ) const
         maintext = label( quantity );
     }
 
-    std::string tagtext = "";
-    std::string modtext = "";
-    ret.str("");
-    if (is_food()) {
+    ret.str( "" );
+    if( is_food() ) {
         if( rotten() ) {
-            ret << _(" (rotten)");
-        } else if ( is_going_bad()) {
-            ret << _(" (old)");
+            ret << _( " (rotten)" );
+        } else if( is_going_bad() ) {
+            ret << _( " (old)" );
         } else if( is_fresh() ) {
-            ret << _(" (fresh)");
+            ret << _( " (fresh)" );
         }
 
-        if (has_flag("HOT")) {
-            ret << _(" (hot)");
-            }
-        if (has_flag("COLD")) {
-            ret << _(" (cold)");
-            }
+        if( has_flag( "HOT" ) ) {
+            ret << _( " (hot)" );
+        }
+        if( has_flag( "COLD" ) ) {
+            ret << _( " (cold)" );
+        }
     }
 
-    if (has_flag("FIT")) {
-        ret << _(" (fits)");
+    if( has_flag( "FIT" ) ) {
+        ret << _( " (fits)" );
     }
 
     if( is_filthy() ) {
-        ret << _(" (filthy)" );
+        ret << _( " (filthy)" );
     }
 
-    if (is_tool() && has_flag("USE_UPS")){
-        ret << _(" (UPS)");
+    if( is_tool() && has_flag( "USE_UPS" ) ){
+        ret << _( " (UPS)" );
     }
     if( has_flag( "RADIO_MOD" ) ) {
-        ret << _(" (radio:");
+        ret << _( " (radio:" );
         if( has_flag( "RADIOSIGNAL_1" ) ) {
-            ret << _("R)");
+            ret << pgettext( "The radio mod is associated with the [R]ed button.", "R)" );
         } else if( has_flag( "RADIOSIGNAL_2" ) ) {
-            ret << _("B)");
+            ret << pgettext( "The radio mod is associated with the [B]lue button.", "B)" );
         } else if( has_flag( "RADIOSIGNAL_3" ) ) {
-            ret << _("G)");
+            ret << pgettext( "The radio mod is associated with the [G]reen button.", "G)" );
         } else {
-            ret << _("Bug");
+            debugmsg( "Why is the radio neither red, blue, nor green?" );
+            ret << "?)";
         }
     }
 
-    if( gunmod_find( "barrel_small" ) ) {
-        modtext += _( "sawn-off ");
+    if( has_flag( "WET" ) ) {
+       ret << _( " (wet)" );
     }
-
-    if( has_flag( "DIAMOND" ) ) {
-        modtext += std::string( _( "diamond" ) ) + " ";
+    if( has_flag( "LITCIG" ) ) {
+        ret << _( " (lit)" );
     }
-
-    if(has_flag("WET"))
-       ret << _(" (wet)");
-
-    if(has_flag("LITCIG"))
-        ret << _(" (lit)");
-
     if( already_used_by_player( g->u ) ) {
         ret << _( " (used)" );
     }
@@ -2312,55 +2285,71 @@ std::string item::tname( unsigned int quantity, bool with_prefix ) const
         ret << _( " (active)" );
     }
 
-    tagtext = ret.str();
+    const std::string tagtext = ret.str();
 
-    ret.str("");
+    std::string modtext;
+    if( gunmod_find( "barrel_small" ) ) {
+        modtext += _( "sawn-off " );
+    }
+    if( has_flag( "DIAMOND" ) ) {
+        modtext += std::string( _( "diamond" ) ) + " ";
+    }
 
+    ret.str( "" );
     //~ This is a string to construct the item name as it is displayed. This format string has been added for maximum flexibility. The strings are: %1$s: Damage text (eg. "bruised"). %2$s: burn adjectives (eg. "burnt"). %3$s: tool modifier text (eg. "atomic"). %4$s: vehicle part text (eg. "3.8-Liter"). $5$s: main item text (eg. "apple"). %6s: tags (eg. "(wet) (fits)").
-    ret << string_format(_("%1$s%2$s%3$s%4$s%5$s%6$s"), damtext.c_str(), burntext.c_str(),
-                        modtext.c_str(), vehtext.c_str(), maintext.c_str(), tagtext.c_str());
+    ret << string_format( _( "%1$s%2$s%3$s%4$s%5$s%6$s" ), damtext.c_str(), burntext.c_str(),
+                          modtext.c_str(), vehtext.c_str(), maintext.c_str(), tagtext.c_str() );
 
-    static const std::string const_str_item_note("item_note");
-    if( item_vars.find(const_str_item_note) != item_vars.end() ) {
+    if( item_vars.find( "item_note" ) != item_vars.end() ) {
         //~ %s is an item name. This style is used to denote items with notes.
-        return string_format(_("*%s*"), ret.str().c_str());
+        return string_format( _( "*%s*" ), ret.str().c_str() );
     } else {
         return ret.str();
     }
 }
 
-std::string item::display_name(unsigned int quantity) const
+std::string item::display_name( unsigned int quantity ) const
 {
-    std::string name = tname(quantity);
-    std::string side = "";
-    std::string qty  = "";
+    std::string name = tname( quantity );
+    std::string sidetxt;
+    std::string amt;
 
-    switch (get_side()) {
-        case LEFT:
-            side = string_format(" (%s)", _("left"));
+    switch( get_side() ) {
+        case side::BOTH:
             break;
-        case RIGHT:
-            side = string_format(" (%s)", _("right"));
+        case side::LEFT:
+            sidetxt = string_format( " (%s)", _( "left" ) );
+            break;
+        case side::RIGHT:
+            sidetxt = string_format( " (%s)", _( "right" ) );
             break;
     }
+    int amount = 0;
+    bool has_item = is_container() && contents.size() == 1;
+    bool has_ammo = is_ammo_container() && !contents.empty();
+    bool contains = has_item || has_ammo;
+    bool show_amt = false;
 
-    // @todo Refactor it to eliminate duplication. Handle infinite charges properly in all the cases.
-    if( is_container() && contents.size() == 1 && contents.front().charges > 0 ) {
-        // a container which is not empty
-        qty = string_format(" (%i)", contents.front().charges);
+    // We should handle infinite charges properly in all cases.
+    if( contains ) {
+        amount = contents.front().charges;
     } else if( is_book() && get_chapters() > 0 ) {
         // a book which has remaining unread chapters
-        qty = string_format(" (%i)", get_remaining_chapters(g->u));
+        amount = get_remaining_chapters( g->u );
     } else if( ammo_capacity() > 0 ) {
         // anything that can be reloaded including tools, magazines, guns and auxiliary gunmods
-        qty = string_format(" (%i)", ammo_remaining());
-    } else if( is_ammo_container() && !contents.empty() ) {
-        qty = string_format( " (%i)", contents.front().charges );
+        amount = ammo_remaining();
+        show_amt = true;
     } else if( count_by_charges() && !has_infinite_charges() ) {
-        qty = string_format(" (%i)", charges);
+        // A chargeable item
+        amount = charges;
     }
 
-    return string_format("%s%s%s", name.c_str(), side.c_str(), qty.c_str());
+    if( amount || show_amt ) {
+        amt = string_format( " (%i)", amount );
+    }
+
+    return string_format( "%s%s%s", name.c_str(), sidetxt.c_str(), amt.c_str() );
 }
 
 nc_color item::color() const
@@ -2902,7 +2891,7 @@ int item::get_encumber() const
     }
 
     // Fit checked before changes, fitting shouldn't reduce penalties from patching.
-    if( item_tags.count("FIT") ) {
+    if( item_tags.count("FIT") && has_flag( "VARSIZE" ) ) {
         encumber = std::max( encumber / 2, encumber - 10 );
     }
 
@@ -3499,57 +3488,20 @@ bool item::is_ammo() const
     return type->ammo.get() != nullptr;
 }
 
-bool item::is_food(player const*u) const
-{
-    if( !u ) {
-        return is_food();
-    }
-
-    if( is_null() ) {
-        return false;
-    }
-
-    if( type->comestible ) {
-        return true;
-    }
-
-    if( u->has_active_bionic( "bio_batteries" ) && is_ammo() && type->ammo->type.count( ammotype( "battery" ) ) ) {
-        return true;
-    }
-
-    if( ( u->has_active_bionic( "bio_reactor" ) ||
-          u->has_active_bionic( "bio_advreactor" ) ) &&
-        is_ammo() && ( type->ammo->type.count( ammotype( "plut_slurry" ) ) ||
-                       type->ammo->type.count( ammotype( "plutonium" ) ) ) ) {
-        return true;
-    }
-    if (u->has_active_bionic("bio_furnace") && flammable() && typeId() != "corpse")
-        return true;
-    return false;
-}
-
-bool item::is_food_container(player const*u) const
-{
-    return (contents.size() >= 1 && contents.front().is_food(u));
-}
-
-bool item::is_food() const
+bool item::is_comestible() const
 {
     return type->comestible != nullptr;
 }
 
-bool item::is_medication() const
+bool item::is_food() const
 {
-    if( type->comestible == nullptr || type->comestible->comesttype != "MED" ) {
-        return false;
-    }
-
-    return true;
+    return is_comestible() && ( type->comestible->comesttype == "FOOD" ||
+                                type->comestible->comesttype == "DRINK" );
 }
 
-bool item::is_medication_container() const
+bool item::is_medication() const
 {
-    return !contents.empty() && contents.front().is_medication();
+    return is_comestible() && type->comestible->comesttype == "MED";
 }
 
 bool item::is_brewable() const
@@ -3691,37 +3643,6 @@ std::set<fault_id> item::faults_potential() const
 int item::wheel_area() const
 {
     return is_wheel() ? type->wheel->diameter * type->wheel->width : 0;
-}
-
-double item::engine_start_difficulty( int temperature ) const
-{
-    double res = 0.0;
-
-    // engine wear gradually increases penalty with a maximum of 0.3
-    if( max_damage() > 0 ) {
-        res += std::min( damage_ / double( max_damage() ), 0.3 );
-    }
-
-    // diesel engines with working glow plugs have maximum penalty of 0.6
-    if( has_flag( "COLD_START" ) ) {
-        static const fault_id fault_glowplug( "fault_engine_glow_plug" );
-        if( !faults.count( fault_glowplug ) ) {
-            temperature = std::max( temperature, 12 );
-        }
-        res += 1.0 - ( std::max( 0, std::min( 30, temperature ) ) / 30.0 );
-    }
-
-    return std::min( res, 1.0 );
-}
-
-int item::engine_start_time( int temp ) const
-{
-    return is_engine() ? type->engine->start_time * pow( 1.0 + engine_start_difficulty( temp ), 3 ) : 0;
-}
-
-int item::engine_start_energy( int temp ) const
-{
-    return is_engine() ? type->engine->start_energy * pow( 1.0 + engine_start_difficulty( temp ), 3 ) : 0;
 }
 
 bool item::is_container_empty() const

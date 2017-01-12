@@ -409,7 +409,10 @@ void oter_type_t::load( JsonObject &jo, const std::string &src )
     const bool strict = src == "dda";
 
     assign( jo, "sym", sym, strict );
-    assign( jo, "name", name, strict );
+    if( assign( jo, "name", name, strict ) ) {
+        // Store localized name if assign() succeeds
+        name = _( name.c_str() );
+    }
     assign( jo, "see_cost", see_cost, strict );
     assign( jo, "extras", extras, strict );
     assign( jo, "mondensity", mondensity, strict );
@@ -1390,7 +1393,8 @@ point overmap::display_notes(int z)
             wrefresh(w_notes);
             redraw = false;
         }
-        ch = getch();
+        // TODO: use input context
+        ch = inp_mngr.get_input_event().get_first_input();
         if (ch == '<' && start >= maxitems) {
             start -= maxitems;
             redraw = true;

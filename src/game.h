@@ -55,6 +55,7 @@ enum quit_status {
     QUIT_NO = 0,    // Still playing
     QUIT_SUICIDE,   // Quit with 'Q'
     QUIT_SAVED,     // Saved and quit
+    QUIT_NOSAVED,   // Quit without saving
     QUIT_DIED,      // Actual death
     QUIT_WATCH,     // Died, and watching aftermath
     QUIT_ERROR
@@ -141,6 +142,9 @@ class game
 
         /** Loads core dynamic data. May throw. */
         void load_core_data();
+
+        /** Returns whether the core data is currently loaded. */
+        bool is_core_data_loaded() const;
 
         /**
          *  Check if mods can be sucessfully loaded
@@ -875,7 +879,6 @@ private:
         void draw_HP();          // Draws the player's HP and Power level
         /** Draws the sidebar (if it's visible), including all windows there */
         void draw_sidebar();
-        void draw_safe_mode( WINDOW *win, int line ) const;
         void draw_sidebar_messages();
         void draw_pixel_minimap();  // Draws the pixel minimap based on the player's current location
 

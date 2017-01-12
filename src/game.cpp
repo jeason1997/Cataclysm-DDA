@@ -351,6 +351,11 @@ bool game::check_mod_data( const std::vector<std::string> &opts )
     return !g->game_error();
 }
 
+bool game::is_core_data_loaded() const
+{
+    return DynamicDataLoader::get_instance().is_data_finalized();
+}
+
 void game::load_core_data()
 {
     // core data can be loaded only once and must be first
@@ -1523,6 +1528,7 @@ bool game::do_turn()
 
         const bool in_bubble_z = m.has_zlevels() || sm_loc.z == get_levz();
         for( auto &veh : sm->vehicles ) {
+            veh->power_parts();
             veh->idle( in_bubble_z && m.inbounds(in_reality.x, in_reality.y) );
         }
     }
@@ -2436,7 +2442,7 @@ vehicle *game::remoteveh()
         tripoint vp;
         remote_veh_string >> vp.x >> vp.y >> vp.z;
         vehicle *veh = m.veh_at( vp );
-        if( veh && veh->fuel_left( "battery", true, true ) > 0 ) {
+        if( veh && veh->fuel_left( "battery", true ) > 0 ) {
             remoteveh_cache = veh;
         } else {
             remoteveh_cache = nullptr;
@@ -4048,6 +4054,7 @@ void game::debug()
                        _( "Overmap editor" ),         // 30
                        _( "Draw benchmark (5 seconds)" ),    // 31
                        _( "Teleport - Adjacent overmap" ),   // 32
+                       _( "Quit to Main Menu" ),    // 33
                        _( "Cancel" ),
                        NULL );
     int veh_num;
@@ -4284,7 +4291,7 @@ void game::debug()
                 mvwputch( w_terrain, offset.y + sound.y, offset.x + sound.x, c_red, '?' );
             }
             wrefresh( w_terrain );
-            getch();
+            inp_mngr.wait_for_any_key();
 #else
             popup( _( "This binary was not compiled with tiles support." ) );
 #endif
@@ -4400,6 +4407,12 @@ void game::debug()
 
         case 32:
             debug_menu::teleport_overmap();
+            break;
+        case 33:
+            if( query_yn( _( "Quit without saving? This may cause issues such as duplicated or missing items and vehicles!" ) ) ) {
+                u.moves = 0;
+                uquit = QUIT_NOSAVED;
+            }
             break;
     }
     erase();
@@ -4697,7 +4710,7 @@ void game::disp_NPCs()
                   apos.x, apos.y, apos.z);
     }
     wrefresh(w);
-    getch();
+    inp_mngr.wait_for_any_key();
     werase(w);
     wrefresh(w);
     delwin(w);
@@ -4937,14 +4950,21 @@ void game::draw_sidebar()
     mvwprintz(w_location, 1, 15, c_ltgray, "%s ", _("Lighting:"));
     wprintz(w_location, ll.second, ll.first.c_str());
 
-    draw_safe_mode( w_location, 0 );
-
     wrefresh(w_location);
 
+    //Safemode coloring
     WINDOW *day_window = sideStyle ? w_status2 : w_status;
     mvwprintz(day_window, 0, sideStyle ? 0 : 41, c_white, _("%s, day %d"),
               season_name_upper(calendar::turn.get_season()).c_str(), calendar::turn.days() + 1);
-
+    if( safe_mode != SAFE_MODE_OFF || get_option<bool>( "AUTOSAFEMODE" ) ) {
+        int iPercent = turnssincelastmon * 100 / get_option<int>( "AUTOSAFEMODETURNS" );
+        wmove(w_status, sideStyle ? 4 : 1, getmaxx(w_status) - 4);
+        const char *letters[] = { "S", "A", "F", "E" };
+        for (int i = 0; i < 4; i++) {
+            nc_color c = (safe_mode == SAFE_MODE_OFF && iPercent < (i + 1) * 25) ? c_red : c_green;
+            wprintz(w_status, c, letters[i]);
+        }
+    }
     wrefresh(w_status);
     if( sideStyle ) {
         wrefresh(w_status2);
@@ -4953,40 +4973,6 @@ void game::draw_sidebar()
     draw_minimap();
     draw_pixel_minimap();
     draw_sidebar_messages();
-}
-
-void game::draw_safe_mode( WINDOW *win, int line ) const
-{
-    const bool autosafemode = get_option<bool>( "AUTOSAFEMODE" );
-    if( safe_mode == SAFE_MODE_OFF && !autosafemode ) {
-        return;
-    }
-
-    const utf8_wrapper safe_text( _( "SAFE" ) );
-    if( safe_mode != SAFE_MODE_OFF ) {
-        right_print( win, line, 1, c_green, "%s", safe_text.c_str() );
-        return;
-    }
-
-    if( autosafemode ) {
-        const float safe_mode_percent =
-            turnssincelastmon * 100.0f / get_option<int>( "AUTOSAFEMODETURNS" );
-
-        const int text_size = safe_text.size();
-        const int starting_position = getmaxx( win ) - safe_text.display_width() - 1;
-        const float percent_per_char = 100.0f / text_size;
-        int written_size = 0;
-        for( int i = 0; i < text_size; i++ ) {
-            nc_color letter_color = safe_mode_percent < ( i + 1 ) * percent_per_char
-                ? c_red : c_green;
-
-            const auto current_char = safe_text.substr( i, 1 );
-            mvwputch( win, line, starting_position + written_size,
-                      letter_color, current_char.str() );
-
-            written_size += current_char.display_width();
-        }
-    }
 }
 
 void game::draw_sidebar_messages()
@@ -6940,7 +6926,6 @@ void game::close()
 
 void game::close( const tripoint &closep )
 {
-    using namespace units::literals;
     bool didit = false;
     const bool inside = !m.is_outside( u.pos() );
 
@@ -9918,7 +9903,7 @@ bool game::handle_liquid( item &liquid, item * const source, const int radius,
     }
     std::vector<std::function<void()>> actions;
 
-    if( liquid.is_food( &u ) ) {
+    if( u.can_consume( liquid ) ) {
         menu.addentry( -1, true, 'e', _( "Consume it" ) );
         actions.emplace_back( [&]() {
             // consume_item already consumes moves.
@@ -10541,7 +10526,7 @@ void game::eat(int pos)
         if( it.typeId() == "1st_aid" ) {
             return false; // temporary fix for #12991
         }
-        return it.made_of( SOLID ) && (it.is_food( &u ) || it.is_food_container( &u ) );
+        return it.made_of( SOLID ) && u.can_consume( it );
     }, _( "Consume item" ), 1, _( "You have nothing to consume." ) );
 
     item *it = item_loc.get_item();
@@ -11056,7 +11041,15 @@ void game::pldrive(int x, int y)
         u.moves -= std::max( cost, u.get_speed() / 3 + 1 );
     }
 
-    veh->cruise_thrust( -y * 1000 );
+    if( y != 0 ) {
+        int thr_amount = 10 * 100;
+        if( veh->cruise_on ) {
+            veh->cruise_thrust( -y * thr_amount );
+        } else {
+            veh->thrust( -y );
+            u.moves = std::min( u.moves, 0 );
+        }
+    }
 
     // @todo Actually check if we're on land on water (or disable water-skidding)
     if( veh->skidding && ( veh->valid_wheel_config( false ) || veh->valid_wheel_config( true ) ) ) {
@@ -13808,7 +13801,7 @@ void game::display_scent()
     draw_ter();
     scent.draw( w_terrain, div * 2, u.pos() + u.view_offset );
     wrefresh(w_terrain);
-    getch();
+    inp_mngr.wait_for_any_key();
 }
 
 void game::init_autosave()
@@ -13895,7 +13888,7 @@ void intro()
                                                        "make the terminal just a smidgen taller?"),
                            minWidth, minHeight, maxx, maxy);
         }
-        wgetch(tmp);
+        inp_mngr.wait_for_any_key();
         getmaxyx(stdscr, maxy, maxx);
     }
     werase(tmp);
@@ -13909,7 +13902,7 @@ void intro()
               "characters (e.g. empty boxes or question marks). You have been warned.");
         fold_and_print(tmp, 0, 0, maxx, c_white, unicode_error_msg, minWidth, minHeight, maxx, maxy);
         wrefresh(tmp);
-        wgetch(tmp);
+        inp_mngr.wait_for_any_key();
         werase(tmp);
     }
 #endif

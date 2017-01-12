@@ -310,7 +310,7 @@ void multipage( WINDOW *w, std::vector<std::string> text, std::string caption, i
             center_print( w, height - 1, c_ltgray, _( "Press any key for more..." ) );
             wrefresh( w );
             refresh();
-            getch();
+            inp_mngr.wait_for_any_key();
             werase( w );
             begin_y = 0;
         } else {
@@ -319,7 +319,7 @@ void multipage( WINDOW *w, std::vector<std::string> text, std::string caption, i
     }
     wrefresh( w );
     refresh();
-    getch();
+    inp_mngr.wait_for_any_key();
 }
 
 // returns single string with left aligned name and right aligned value
@@ -693,7 +693,8 @@ bool internal_query_yn( const char *mes, va_list ap )
         fold_and_print( w, 1, 1, win_width, c_ltred, text + query );
         wrefresh( w );
 
-        ch = getch();
+        // TODO: use input context
+        ch = inp_mngr.get_input_event().get_first_input();
     };
 
     werase( w );
@@ -1108,7 +1109,8 @@ long popup( const std::string &text, PopupFlags flags )
     // Don't wait if not required.
     while( ( flags & PF_NO_WAIT ) == 0 ) {
         wrefresh( w );
-        ch = getch();
+        // TODO: use input context
+        ch = inp_mngr.get_input_event().get_first_input();
         if( ( flags & PF_GET_KEY ) != 0 ) {
             // return the first key that got pressed.
             werase( w );
@@ -1174,7 +1176,7 @@ void full_screen_popup( const char *mes, ... )
 //all this should probably be cleaned up at some point, rather than using a function for things it wasn't meant for
 // well frack, half the game uses it so: optional (int)selected argument causes entry highlight, and enter to return entry's key. Also it now returns int
 //@param without_getch don't wait getch, return = (int)' ';
-int draw_item_info( const int iLeft, const int iWidth, const int iTop, const int iHeight,
+input_event draw_item_info( const int iLeft, const int iWidth, const int iTop, const int iHeight,
                     const std::string sItemName, const std::string sTypeName,
                     std::vector<iteminfo> &vItemDisplay, std::vector<iteminfo> &vItemCompare,
                     int &selected, const bool without_getch, const bool without_border,
@@ -1318,7 +1320,7 @@ std::string format_item_info( const std::vector<iteminfo> &vItemDisplay,
     return buffer.str();
 }
 
-int draw_item_info( WINDOW *win, const std::string sItemName, const std::string sTypeName,
+input_event draw_item_info( WINDOW *win, const std::string sItemName, const std::string sTypeName,
                     std::vector<iteminfo> &vItemDisplay, std::vector<iteminfo> &vItemCompare,
                     int &selected, const bool without_getch, const bool without_border,
                     const bool handle_scrolling, const bool scrollbar_left, const bool use_full_win )
@@ -1339,7 +1341,7 @@ int draw_item_info( WINDOW *win, const std::string sItemName, const std::string 
     const auto width = getmaxx( win ) - ( use_full_win ? 1 : b * 2 );
     const auto height = getmaxy( win ) - ( use_full_win ? 0 : 2 );
 
-    int ch = ( int )' ';
+    input_event result;
     while( true ) {
         int iLines = 0;
         if( !buffer.str().empty() ) {
@@ -1369,7 +1371,9 @@ int draw_item_info( WINDOW *win, const std::string sItemName, const std::string 
             break;
         }
 
-        ch = ( int )getch();
+        // TODO: use input context
+        result = inp_mngr.get_input_event();
+        const int ch = ( int )result.get_first_input();
         if( handle_scrolling && ch == KEY_PPAGE ) {
             selected--;
             werase( win );
@@ -1377,17 +1381,17 @@ int draw_item_info( WINDOW *win, const std::string sItemName, const std::string 
             selected++;
             werase( win );
         } else if( selected > 0 && ( ch == '\n' || ch == KEY_RIGHT ) ) {
-            ch = '\n';
+            result = input_event( static_cast<long>( '\n' ), CATA_INPUT_KEYBOARD );
             break;
         } else if( selected == KEY_LEFT ) {
-            ch = ( int )' ';
+            result = input_event( static_cast<long>( ' ' ), CATA_INPUT_KEYBOARD );
             break;
         } else {
             break;
         }
     }
 
-    return ch;
+    return result;
 }
 
 char rand_char()
@@ -1460,23 +1464,6 @@ std::string to_upper_case( const std::string &s )
         return std::use_facet<std::ctype<char_t>>( std::locale() ).toupper( ch );
     } );
     return res;
-}
-
-std::string ordinal( int val ) {
-    switch( val ) {
-        case 1: return _( "1st" );
-        case 2: return _( "2nd" );
-        case 3: return _( "3rd" );
-        case 4: return _( "4th" );
-        case 5: return _( "5th" );
-        case 6: return _( "6th" );
-        case 7: return _( "7th" );
-        case 8: return _( "8th" );
-        case 9: return _( "9th" );
-
-        // fallback (not translated)
-        default: return string_format( "%ith", val );
-    };
 }
 
 // find the position of each non-printing tag in a string
@@ -1713,7 +1700,8 @@ void hit_animation( int iX, int iY, nc_color cColor, const std::string &cTile )
     wrefresh( w_hit );
 
     timeout( get_option<int>( "ANIMATION_DELAY" ) );
-    getch(); //using this, because holding down a key with nanosleep can get yourself killed
+    // Skip input (if any), because holding down a key with nanosleep can get yourself killed
+    inp_mngr.get_input_event();
     timeout( -1 );
 }
 
@@ -2093,7 +2081,8 @@ void display_table( WINDOW *w, const std::string &title, int columns,
         }
         draw_scrollbar( w, offset, rows, data.size() / 3, 2, 0 );
         wrefresh( w );
-        int ch = getch();
+        // TODO: use input context
+        int ch = inp_mngr.get_input_event().get_first_input();
         if( ch == KEY_DOWN && ( ( offset + 1 ) * columns ) < ( int )data.size() ) {
             offset++;
         } else if( ch == KEY_UP && offset > 0 ) {
@@ -2465,9 +2454,13 @@ std::string wildcard_trim_rule(const std::string &pattern_in)
 
 std::vector<std::string> &wildcard_split(const std::string &text_in, char delim_in, std::vector<std::string> &elems_in)
 {
+    elems_in.clear();
+    if( text_in.empty() ) {
+        return elems_in; // Well, that was easy.
+    }
+
     std::stringstream ss(text_in);
     std::string item;
-    elems_in.clear();
     while (std::getline(ss, item, delim_in)) {
         elems_in.push_back(item);
     }

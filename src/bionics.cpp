@@ -310,7 +310,7 @@ bool player::activate_bionic( int b, bool eff_only )
         }
         wrefresh( w );
         refresh();
-        getch();
+        inp_mngr.wait_for_any_key();
         delwin( w );
     } else if( bio.id == "bio_blood_filter" ) {
         static const std::vector<efftype_id> removable = {{
@@ -688,7 +688,7 @@ void player::process_bionic( int b )
                 continue;
             }
 
-            wants_power_amt = veh->discharge( wants_power_amt );
+            wants_power_amt = veh->discharge_battery( wants_power_amt );
             if( wants_power_amt == 0 ) {
                 charge_power( 1 );
                 break;
